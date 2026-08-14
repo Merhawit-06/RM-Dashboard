@@ -1,205 +1,478 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-import plotly.express as px
-import io
+from io import BytesIO
 
-# Page Setup & Dark Theme CSS Styling
+# ==========================================
+# 1. Page Configuration & Custom CSS (Corporate Theme)
+# ==========================================
 st.set_page_config(
-    page_title="RM Performance Dashboard",
+    page_title="Breaking Boundaries | RM Dashboard",
+    page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
+# Dashen Bank Corporate Color Palette & Styling
+# Based on PPT theme: Dark Blue, Bright Cyan, White
 st.markdown("""
 <style>
+    /* Main App Background & Text */
     .stApp {
-        background-color: #0b0e1e;
-        color: #ffffff;
+        background-color: #f4f7fc;
+        color: #1a202c;
     }
+
+    /* Top Banner / Header Styling */
+    .report-header {
+        background: linear-gradient(90deg, #0a1f44 0%, #1e3a8a 100%);
+        color: white;
+        padding: 20px 25px;
+        border-radius: 10px;
+        margin-bottom: 25px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        position: relative;
+    }
+    .report-header h1 { margin: 0; font-size: 28px; font-weight: 800; color: white !important;}
+    .report-header h3 { margin: 5px 0 0; font-size: 18px; font-weight: 400; color: #a0aec0 !important;}
+    .dashen-logo {
+        position: absolute;
+        top: 15px;
+        right: 25px;
+        font-size: 24px;
+        font-weight: bold;
+        color: #00ffff;
+    }
+
+    /* KPI Card Styling */
     div[data-testid="metric-container"] {
-        background-color: #161a35;
-        border: 1px solid #282d54;
-        padding: 15px;
-        border-radius: 10px;
+        background-color: white;
+        border-radius: 12px;
+        padding: 20px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        border: 1px solid #e2e8f0;
     }
-    .kpi-card {
-        background-color: #161a35;
-        border-radius: 10px;
-        padding: 15px;
-        border: 1px solid #282d54;
-        text-align: center;
+    div[data-testid="metric-container"] label {
+        font-size: 14px;
+        color: #718096;
+        font-weight: 600;
     }
-    .kpi-title { font-size: 13px; color: #a0a5c0; margin-bottom: 5px; font-weight: 600; }
-    .kpi-value { font-size: 26px; font-weight: bold; color: #ffffff; }
-    .kpi-sub { font-size: 12px; margin-top: 4px; }
+    div[data-testid="metric-container"] div[data-testid="stMetricValue"] {
+        font-size: 32px;
+        font-weight: 700;
+        color: #1a202c;
+    }
+
+    /* Section & Container Styling */
+    .report-section {
+        background-color: white;
+        border-radius: 12px;
+        padding: 25px;
+        margin-bottom: 25px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        border: 1px solid #e2e8f0;
+    }
+    .report-section-title {
+        font-size: 20px;
+        font-weight: 700;
+        color: #0a1f44;
+        margin-bottom: 20px;
+        padding-bottom: 10px;
+        border-bottom: 2px solid #e2e8f0;
+    }
+
+    /* Table Styling */
+    .dataframe {
+        font-size: 13px !important;
+        border: none !important;
+    }
+    .dataframe th {
+        background-color: #0a1f44 !important;
+        color: white !important;
+        text-align: left !important;
+        padding: 10px !important;
+    }
+    .dataframe td {
+        padding: 8px !important;
+        border-bottom: 1px solid #e2e8f0 !important;
+    }
+
+    /* Custom Color Accents */
+    .text-cyan { color: #00ffff !important; }
+    .text-green { color: #4cd137 !important; }
+    .text-red { color: #e84118 !important; }
+
 </style>
 """, unsafe_allow_html=True)
 
-# Helper function for dark layout styling on Plotly charts
-def update_dark_layout(fig, title=""):
-    fig.update_layout(
-        title={'text': title, 'y': 0.9, 'x': 0.05, 'xanchor': 'left', 'yanchor': 'top'},
-        paper_bgcolor='rgba(22, 26, 53, 1)',
-        plot_bgcolor='rgba(22, 26, 53, 1)',
-        font=dict(color="#e0e0e0", family="Sans-serif"),
-        margin=dict(l=30, r=30, t=50, b=30),
-        height=320
-    )
-    return fig
+# ==========================================
+# 2. Helper Functions (Data & Logic)
+# ==========================================
 
-# Dashboard Title Banner
-st.markdown("<h2 style='color: #ffffff; margin-bottom: 20px;'>RM Performance Analysis Dashboard</h2>", unsafe_allow_html=True)
+def format_value(value, metric_type='ETB', decimals=1):
+    """Formats large numbers based on type (ETB, FCY, Percent)"""
+    if value is None or pd.isna(value):
+        return "-"
 
-# Sidebar: File Import & Filter Options
-st.sidebar.header("📁 Data Import & Filters")
-uploaded_file = st.sidebar.file_uploader("Upload RM Excel File", type=["xlsx", "xls"])
+    if metric_type == 'Percent':
+        return f"{value:.{decimals}f}%"
+    elif metric_type == 'ETB':
+        # Convert to Billion for high-level display
+        return f"{value / 1e9:.{decimals}f} Bln"
+    elif metric_type == 'Mln':
+        return f"{value / 1e6:.{decimals}f} Mln"
+    else:
+        # Default FCY or absolute number
+        return f"{value / 1e6:.{decimals}f} Mln"
+
+def calculate_achievement(actual, plan):
+    """ppt formula: (Actual / Plan) * 100"""
+    if plan == 0 or pd.isna(plan):
+        return 0.0
+    return (actual / plan) * 100
+
+def generate_sample_data(report_type):
+    """Generates synthetic data matching PPT structures for deployment testing"""
+    if report_type == 'Deposit':
+        # based on PPT images 9, 10, 11
+        return pd.DataFrame({
+            'RM_Name': ['Eskidar Ayalew', 'Derese Habtamu', 'Solomon Worku', 'Melaku Fentaw', 'Dawit Getachew', 'Abebaw Abebe', 'Belay Mesfin'],
+            'Baseline': [7.17e9, 25.6e9, 4.25e9, 5.21e8, 2.19e8, 6.47e9, 5.18e9],
+            'Cumulative_Incremental_Aug13': [-3.87e8, -8.25e7, 2.03e8, 2.07e9, -9.22e7, 6.48e7, -1.45e9],
+            'Cumulative_Incremental_Aug14': [-1.1e9, -2.42e8, 3.97e7, 2.0e9, 1.32e8, 1.09e8, -1.49e9],
+            'Daily_Plan': [3.7e6, 3.8e6, 3.9e6, 3.7e6, 2.1e6, 7.2e6, 3.7e6],
+            'Daily_Incremental_Aug14': [-7.12e8, -1.6e8, -1.64e8, -7.3e7, 2.24e8, 4.4e7, -3.2e7],
+            # ppt table ranking columns
+            'Total_Deposit_Aug13': [7.0e9, 25.5e9, 4.4e9, 2.5e9, 2.1e8, 6.5e9, 3.7e9],
+            'Total_Deposit_Aug14': [6.0e9, 25.4e9, 4.2e9, 2.5e9, 4.3e8, 6.5e9, 3.6e9],
+            'Daily_Achivement': [-19233, -4139, -4128, -1975, 10259, 610, -885] # Precalculated from Daily Incremental / Daily Plan
+        })
+    else:
+        # based on PPT images 6, 7, 8
+        return pd.DataFrame({
+            'RM_Name': ['Eskidar Ayalew', 'Melaku Fentaw', 'Dawit Kebede', 'Tesfalem Belay', 'Fitsum Ashebir', 'Abebaw Abebe', 'Yohannes Habte'],
+            'Baseline_FCY': [1e7, 5e6, 8e6, 2e6, 1e6, 1e7, 9e6],
+            'Plan_Aug14': [7.85e6, 7.85e6, 7.85e6, 1.57e6, 1.57e6, 4.43e6, 7.85e6],
+            'Actual_Aug14': [3.6e7, 1.99e7, 5.92e6, 1.34e6, 7.57e4, 1.06e6, 1.12e6],
+            # precalculated achievement from actual / plan
+            'Achievement_Aug14': [460.0, 253.0, 75.0, 86.0, 5.0, 24.0, 14.0],
+            'Total_FCY_Aug13': [3.5e7, 1.99e7, 6.0e6, 1.30e6, 8.0e4, 1.1e6, 1.2e6],
+            'Total_FCY_Aug14': [3.6e7, 1.99e7, 5.9e6, 1.34e6, 7.5e4, 1.0e6, 1.1e6]
+        })
+
+# ==========================================
+# 3. Sidebar (Navigation, Upload & Export)
+# ==========================================
+st.sidebar.image("https://dashenbanksc.com/wp-content/uploads/2021/07/Dashen-Bank-Logo-Standard.png", width=200)
+st.sidebar.markdown("## BREAKING BOUNDARIES:\n### BEYOND TARGETS")
+st.sidebar.markdown("---")
+
+report_date = st.sidebar.date_input("Report Date", value=pd.to_datetime('2026-08-14'))
+formatted_date = report_date.strftime("%B %d, %Y")
+
+# Major Report Type Switcher (Deposit vs FCY)
+analysis_type = st.sidebar.radio(
+    "Select Performance View",
+    ('Deposit Performance', 'FCY Performance'),
+    index=0
+)
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("📥 Data Management")
+uploaded_file = st.sidebar.file_uploader("Upload Corporate Performance Excel", type=["xlsx", "xls"])
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("📤 Export")
+
+# ==========================================
+# 4. Main Dashboard Header
+# ==========================================
+st.markdown(f"""
+<div class="report-header">
+    <h1>{analysis_type}</h1>
+    <h3>Daily Corporate Performance Report | {formatted_date}</h3>
+    <div class="dashen-logo">Dashen Bank</div>
+</div>
+""", unsafe_allow_html=True)
+
+# ==========================================
+# 5. Data Loading Logic
+# ==========================================
+df = None
 
 if uploaded_file is not None:
     try:
-        df = pd.read_excel(uploaded_file)
-    except Exception:
-        df = pd.read_excel(uploaded_file, sheet_name=0)
+        # Assuming different sheets for Deposit vs FCY if available
+        sheet_name = 'DepositData' if 'Deposit' in analysis_type else 'FCYData'
+        df = pd.read_excel(uploaded_file, sheet_name=sheet_name)
+        st.success(f"Successfully loaded {analysis_type} from {uploaded_file.name}")
+    except Exception as e:
+        st.error(f"Error loading file. Ensuring the sheet '{sheet_name}' exists. Loading sample data instead.")
+        df = generate_sample_data('Deposit' if 'Deposit' in analysis_type else 'FCY')
 else:
-    # Default sample data containing Plan vs Actual metrics
-    df = pd.DataFrame({
-        'Month': ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'],
-        'RM_Name': ['RM Alpha', 'RM Beta', 'RM Gamma', 'RM Delta', 'RM Epsilon', 'RM Zeta'],
-        'Target': [100, 120, 110, 130, 125, 140],
-        'Actual': [95, 115, 118, 122, 130, 145],
-        'Deposit_Target': [500, 600, 550, 650, 620, 700],
-        'Deposit_Actual': [480, 590, 570, 640, 650, 720],
-        'CSAT': [85, 88, 90, 87, 92, 94],
-        'Promoters': [67.7, 70.2, 65.4, 68.0, 72.1, 75.0]
-    })
+    # Use pre-loaded sample data if no file is uploaded
+    df = generate_sample_data('Deposit' if 'Deposit' in analysis_type else 'FCY')
 
-# RM Filter Selection
-rm_list = ["All RMs"] + list(df['RM_Name'].unique()) if 'RM_Name' in df.columns else ["All RMs"]
-selected_rm = st.sidebar.selectbox("Select Relationship Manager", rm_list)
+# Verify required columns exist
+required_cols_dep = ['RM_Name', 'Baseline', 'Daily_Plan', 'Daily_Incremental_Aug14', 'Total_Deposit_Aug14', 'Daily_Achivement']
+required_cols_fcy = ['RM_Name', 'Baseline_FCY', 'Plan_Aug14', 'Actual_Aug14', 'Achievement_Aug14', 'Total_FCY_Aug14']
 
-filtered_df = df if selected_rm == "All RMs" else df[df['RM_Name'] == selected_rm]
+if 'Deposit' in analysis_type:
+    if not all(col in df.columns for col in required_cols_dep):
+        st.error("Uploaded excel is missing required columns for Deposit Performance.")
+        st.stop()
+else:
+    if not all(col in df.columns for col in required_cols_fcy):
+        st.error("Uploaded excel is missing required columns for FCY Performance.")
+        st.stop()
 
-# Excel Export Section
-st.sidebar.markdown("---")
-st.sidebar.subheader("📥 Export Dashboard Data")
+# ==========================================
+# 6. Aggregate Overview (Section A)
+# ==========================================
 
-buffer = io.BytesIO()
-with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-    filtered_df.to_excel(writer, index=False, sheet_name='RM_Performance')
+# High-level summary of baseline Performance
+if uploaded_file is None:
+     st.warning("Currently viewing sample data. Upload your corporate excel file in the sidebar to view actual performance.")
 
-st.sidebar.download_button(
-    label="Download Data as Excel",
-    data=buffer.getvalue(),
-    file_name=f"RM_Performance_{selected_rm.replace(' ', '_')}.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-)
+kpi_col1, kpi_col2, kpi_col3 = st.columns(3)
 
-# Core Metric Calculations
-total_target = filtered_df['Target'].sum() if 'Target' in filtered_df.columns else 0
-total_actual = filtered_df['Actual'].sum() if 'Actual' in filtered_df.columns else 0
-achievement_rate = (total_actual / total_target * 100) if total_target > 0 else 0
-avg_csat = filtered_df['CSAT'].mean() if 'CSAT' in filtered_df.columns else 0
+with kpi_col1:
+    if 'Deposit' in analysis_type:
+        # Example using June Baseline from slide 5
+        baseline_val = 105.1e9 # ETB Bln
+        incremental_from_june = 1.9e9
+        st.metric(
+            label=f"Positional Deposit as of {report_date.strftime('%B %Y')}",
+            value=format_value(baseline_val, 'ETB', 1),
+            delta=f"{format_value(incremental_from_june, 'ETB', 1)} From June Baseline"
+        )
+    else:
+        # Example Positional FCY from slide 5
+        positional_fcy_val = 99.4e6 # USD Mln
+        fcy_change = 5.1e5 # 0.51 Mln
+        st.metric(
+            label=f"Positional FCY as of {report_date.strftime('%B %Y')}",
+            value=format_value(positional_fcy_val, 'USD', 1),
+            delta=f"{format_value(fcy_change, 'Mln', 2)} From Previous Day",
+            delta_color="normal"
+        )
 
-# Row 1: KPI Cards
-k1, k2, k3, k4 = st.columns(4)
+with kpi_col2:
+    if 'Deposit' in analysis_type:
+        st.metric(label="Not-Assigned ETB Deposit", value="137.44 Mln", delta="-12.3 Mln")
+    else:
+        st.metric(label="Not-Assigned USD FCY", value="0.06 Mln", delta="-0.01 Mln")
 
-with k1:
-    st.markdown(f"""
-    <div class="kpi-card">
-        <div class="kpi-title">TOTAL TARGET (PLAN)</div>
-        <div class="kpi-value">{total_target:,.0f}</div>
-        <div class="kpi-sub" style="color: #a0a5c0;">Assigned Goal</div>
-    </div>
-    """, unsafe_allow_html=True)
+with kpi_col3:
+     st.metric(label="Overall Plan Achievement", value="78.3%", delta="-2.1%")
 
-with k2:
-    variance = total_actual - total_target
-    color = "#4cd137" if variance >= 0 else "#e84118"
-    st.markdown(f"""
-    <div class="kpi-card">
-        <div class="kpi-title">ACTUAL ACHIEVED</div>
-        <div class="kpi-value">{total_actual:,.0f}</div>
-        <div class="kpi-sub" style="color: {color};">{"▲" if variance >= 0 else "▼"} {abs(variance):,.0f} Variance</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with k3:
-    st.markdown(f"""
-    <div class="kpi-card">
-        <div class="kpi-title">ACHIEVEMENT RATE</div>
-        <div class="kpi-value">{achievement_rate:.1f}%</div>
-        <div class="kpi-sub" style="color: #00d2d3;">Plan vs Actual Ratio</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with k4:
-    st.markdown(f"""
-    <div class="kpi-card">
-        <div class="kpi-title">CSAT SCORE</div>
-        <div class="kpi-value">{avg_csat:.1f}%</div>
-        <div class="kpi-sub" style="color: #54a0ff;">Customer Satisfaction</div>
-    </div>
-    """, unsafe_allow_html=True)
+# ==========================================
+# 7. Specific Analysis Sections
+# ==========================================
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# Row 2: Performance Gauge Indicators
-g1, g2, g3 = st.columns(3)
+if 'Deposit' in analysis_type:
+    # ----------------------------------------
+    # DEPOSIT PERFORMANCE VIEW
+    # ----------------------------------------
 
-def create_gauge(value, title, color="#2e86de"):
-    fig = go.Figure(go.Indicator(
-        mode="gauge+number",
-        value=value,
-        title={'text': title, 'font': {'size': 14, 'color': '#ffffff'}},
-        number={'suffix': "%", 'font': {'size': 24, 'color': '#ffffff'}},
-        gauge={
-            'axis': {'range': [0, 120], 'tickwidth': 1, 'tickcolor': "#555"},
-            'bar': {'color': color},
-            'bgcolor': "#10132b",
-            'borderwidth': 0,
-            'steps': [
-                {'range': [0, 60], 'color': '#20264d'},
-                {'range': [60, 120], 'color': '#1a2042'}
-            ],
-        }
-    ))
-    return update_dark_layout(fig)
+    # Section 1: Detailed RM Performance Table
+    st.markdown("""
+    <div class="report-section">
+        <div class="report-section-title">Relationship Managers Deposit Performance Dashboard</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-with g1:
-    st.plotly_chart(create_gauge(achievement_rate, "Target Achievement Rate", "#00d2d3"), use_container_width=True)
+    # Replicate PPT table structure (Slide 13)
+    display_df = df[['RM_Name', 'Baseline', 'Cumulative_Incremental_Aug13', 'Cumulative_Incremental_Aug14', 'Daily_Plan', 'Daily_Incremental_Aug14', 'Daily_Achivement']].copy()
 
-with g2:
-    csat_val = filtered_df['CSAT'].iloc[-1] if 'CSAT' in filtered_df.columns else 0
-    st.plotly_chart(create_gauge(csat_val, "Customer Effort Score (CES)", "#ff9f43"), use_container_width=True)
+    # Apply formatting matching PPT
+    format_cols = {
+        'Baseline': '{:,.2f}',
+        'Cumulative_Incremental_Aug13': '({:,.2f})',
+        'Cumulative_Incremental_Aug14': '({:,.2f})',
+        'Daily_Plan': '{:,.2f}',
+        'Daily_Incremental_Aug14': '({:,.2f})',
+        'Daily_Achivement': '{:.1f}%'
+    }
 
-with g3:
-    nps_val = filtered_df['Promoters'].iloc[-1] if 'Promoters' in filtered_df.columns else 0
-    st.plotly_chart(create_gauge(nps_val, "Net Performance Score (NPS)", "#54a0ff"), use_container_width=True)
+    # Style pre-processing: negative numbers in red brackets
+    styled_df = display_df.style.format(format_cols)
 
-# Row 3: Visual Analytics
-c1, c2 = st.columns(2)
+    st.dataframe(styled_df, use_container_width=True)
 
-with c1:
-    fig_bar = go.Figure()
-    categories = filtered_df['RM_Name'] if 'RM_Name' in filtered_df.columns else filtered_df['Month']
-    
-    if 'Deposit_Target' in filtered_df.columns:
-        fig_bar.add_trace(go.Bar(name='Deposit Target', x=categories, y=filtered_df['Deposit_Target'], marker_color='#282d54'))
-    if 'Deposit_Actual' in filtered_df.columns:
-        fig_bar.add_trace(go.Bar(name='Deposit Actual', x=categories, y=filtered_df['Deposit_Actual'], marker_color='#10ac84'))
-    
-    fig_bar.update_layout(barmode='group')
-    update_dark_layout(fig_bar, "Deposit Target vs Actual")
-    st.plotly_chart(fig_bar, use_container_width=True)
+    # Section 2: Top / Bottom Charts
+    chart_col1, chart_col2 = st.columns(2)
 
-with c2:
-    fig_line = go.Figure()
-    x_axis = filtered_df['Month'] if 'Month' in filtered_df.columns else range(len(filtered_df))
-    
-    if 'Actual' in filtered_df.columns:
-        fig_line.add_trace(go.Scatter(x=x_axis, y=filtered_df['Actual'], mode='lines+markers', name='Actual', line=dict(color='#00d2d3', width=3)))
-    if 'Target' in filtered_df.columns:
-        fig_line.add_trace(go.Scatter(x=x_axis, y=filtered_df['Target'], mode='lines', name='Plan (Target)', line=dict(color='#ff6b6b', width=2, dash='dash')))
-        
-    update_dark_layout(fig_line, "Overall Achievement Trend")
-    st.plotly_chart(fig_line, use_container_width=True)
+    with chart_col1:
+        st.markdown("""
+        <div class="report-section">
+            <div class="report-section-title">Corporate Big Relationship Managers with Daily Positive Achievement</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Ranking logic: Daily Achievement / Plan (PPT slide 11 ranking)
+        top_rms = df[df['Daily_Incremental_Aug14'] > 0].sort_values(by='Daily_Achivement', ascending=False).head(5)
+
+        fig_top_dep = go.Figure(go.Bar(
+            x=top_rms['Daily_Achivement'],
+            y=top_rms['RM_Name'],
+            orientation='h',
+            marker_color='#4cd137',
+            text=[f"{v:.0f}%" for v in top_rms['Daily_Achivement']],
+            textposition='auto',
+        ))
+        fig_top_dep.update_layout(
+            paper_bgcolor='white',
+            plot_bgcolor='white',
+            margin=dict(l=20, r=20, t=20, b=20),
+            xaxis=dict(title='Daily Plan Achievement %', showgrid=True, gridcolor='#e2e8f0'),
+            yaxis=dict(autorange="reversed") # Highest at top
+        )
+        st.plotly_chart(fig_top_dep, use_container_width=True)
+
+    with chart_col2:
+        st.markdown("""
+        <div class="report-section">
+            <div class="report-section-title">Top Customers by Deposit Variance (Last 24 Hours)</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Example data matching slide 14 structure
+        cus_variance_df = pd.DataFrame({
+            'Customer': ['Horizon Plantation Plc', 'Eth Petroleum Enterprise', 'Midroc Gold Mine Plc', 'Ethio Telecom Telebirr', 'Qatar Airways Qcsc'],
+            'Variance': [-461473042.05, -376920129.50, -146022562.98, -142245133.16, -135086423.28],
+            'RM': ['Eskidar A', 'Derese H', 'Eskidar A', 'Endalikachew N', 'Solomon W']
+        }).sort_values(by='Variance')
+
+        fig_cus_var = go.Figure(go.Bar(
+            x=cus_variance_df['Variance'],
+            y=cus_variance_df['Customer'],
+            orientation='h',
+            marker_color='#e84118',
+            text=[f"({abs(v)/1e6:.1f} Mln)" for v in cus_variance_df['Variance']],
+            textposition='inside',
+        ))
+        fig_cus_var.update_layout(
+            paper_bgcolor='white',
+            plot_bgcolor='white',
+            margin=dict(l=20, r=20, t=20, b=20),
+            xaxis=dict(title='Daily Deposit Variance (ETB)', showgrid=True, gridcolor='#e2e8f0'),
+             yaxis=dict(autorange="reversed") # Top variance at top
+        )
+        st.plotly_chart(fig_cus_var, use_container_width=True)
+
+else:
+    # ----------------------------------------
+    # FCY PERFORMANCE VIEW
+    # ----------------------------------------
+
+    # Section 1: Detailed RM Performance Table
+    st.markdown("""
+    <div class="report-section">
+        <div class="report-section-title">Corporate Big RM Positional FCY Performance Dashboard</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # PPT logic: ACTUAL / PLAN %
+    fcydf = df[['RM_Name', 'Plan_Aug14', 'Actual_Aug14', 'Achievement_Aug14']].copy()
+    fcydf['Variance'] = fcydf['Actual_Aug14'] - fcydf['Plan_Aug14']
+
+    # ppt Ranking logic: Actual Achievemnent (Slide 6/7/8 ranking)
+    fcydf = fcydf.sort_values(by='Actual_Aug14', ascending=False)
+
+    # PPT formatting: Actual/Plan in bold blace, Achievement in %
+    styled_fcy = fcydf.style.format({
+        'Plan_Aug14': '{:,.2f}',
+        'Actual_Aug14': '{:,.2f}',
+        'Variance': '{:,.2f}',
+        'Achievement_Aug14': '{:.0f}%'
+    })
+
+    st.dataframe(styled_fcy, use_container_width=True)
+
+    # Section 2: Charts
+    chart_col1_fcy, chart_col2_fcy = st.columns(2)
+
+    with chart_col1_fcy:
+        st.markdown("""
+        <div class="report-section">
+            <div class="report-section-title">Positional FCY Plan vs Actual Performance</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        top_fcy_arms = fcydf.head(6)
+
+        fig_fcy_pa = go.Figure()
+        fig_fcy_pa.add_trace(go.Bar(
+            name='Plan',
+            x=top_fcy_arms['RM_Name'],
+            y=top_fcy_arms['Plan_Aug14'],
+            marker_color='#1a2042'
+        ))
+        fig_fcy_pa.add_trace(go.Bar(
+            name='Actual',
+            x=top_fcy_arms['RM_Name'],
+            y=top_fcy_arms['Actual_Aug14'],
+            marker_color='#00ffff'
+        ))
+
+        fig_fcy_pa.update_layout(
+            barmode='group',
+            paper_bgcolor='white',
+            plot_bgcolor='white',
+            margin=dict(l=20, r=20, t=40, b=20),
+            yaxis=dict(title='FCY Performance (USD Mln)', showgrid=True, gridcolor='#e2e8f0'),
+        )
+        st.plotly_chart(fig_fcy_pa, use_container_width=True)
+
+    with chart_col2_fcy:
+        st.markdown("""
+        <div class="report-section">
+            <div class="report-section-title">Departmental Positional FCY Performance [USD Mln]</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Example data matching slide 5b chart
+        fcy_dept_df = pd.DataFrame({
+            'Dept': ['Manufacturing & Ag', 'Import-Export', 'Institutional B', 'Service', 'Domestic Trade', 'Corporate Center'],
+            'Actual': [1.7, 76.6, 3.7, 13.5, 4.0, 4.0]
+        }).sort_values(by='Actual')
+
+        fig_fcy_dept = go.Figure(go.Bar(
+            x=fcy_dept_df['Actual'],
+            y=fcy_dept_df['Dept'],
+            orientation='h',
+            marker_color='#1e3a8a',
+            text=[f"{v:.1f}M" for v in fcy_dept_df['Actual']],
+            textposition='auto',
+        ))
+        fig_fcy_dept.update_layout(
+            paper_bgcolor='white',
+            plot_bgcolor='white',
+            margin=dict(l=20, r=20, t=20, b=20),
+            xaxis=dict(title='Positional FCY (USD Mln)', showgrid=True, gridcolor='#e2e8f0'),
+             yaxis=dict(autorange="reversed")
+        )
+        st.plotly_chart(fig_fcy_dept, use_container_width=True)
+
+# ==========================================
+# 8. Export Functionality (sidebar continued)
+# ==========================================
+
+st.sidebar.markdown("---")
+if df is not None:
+    # Prepare excel buffer for download
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name=analysis_type)
+    processed_data = output.getvalue()
+
+    st.sidebar.download_button(
+        label=f"Download {analysis_type} as Excel",
+        data=processed_data,
+        file_name=f"Dashen_RM_Performance_{analysis_type}_{report_date.strftime('%Y%m%d')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key='download-excel'
+    )
